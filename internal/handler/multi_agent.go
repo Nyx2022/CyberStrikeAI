@@ -141,7 +141,13 @@ func (h *AgentHandler) MultiAgentLoopStream(c *gin.Context) {
 	orch := strings.TrimSpace(req.Orchestration)
 
 	taskStatus := "completed"
-	defer h.tasks.FinishTask(conversationID, taskStatus)
+	// 仅在成功 StartTask 后再 FinishTask；避免「任务已存在」分支 return 时误删正在运行的同会话任务。
+	taskOwned := false
+	defer func() {
+		if taskOwned {
+			h.tasks.FinishTask(conversationID, taskStatus)
+		}
+	}()
 
 	sendEvent("progress", "正在启动 Eino 多代理...", map[string]interface{}{
 		"conversationId": conversationID,
@@ -178,6 +184,7 @@ func (h *AgentHandler) MultiAgentLoopStream(c *gin.Context) {
 				timeoutCancel()
 				return
 			}
+			taskOwned = true
 			firstRun = false
 		} else {
 			if err := h.tasks.ResetTaskCancelForContinue(conversationID, cancelWithCause); err != nil {
@@ -215,8 +222,10 @@ func (h *AgentHandler) MultiAgentLoopStream(c *gin.Context) {
 			break
 		}
 
-		h.persistEinoAgentTraceForResume(conversationID, result)
 		cause := context.Cause(baseCtx)
+		if shouldPersistEinoAgentTraceAfterRunError(baseCtx) {
+			h.persistEinoAgentTraceForResume(conversationID, result)
+		}
 		if errors.Is(cause, ErrUserInterruptContinue) {
 			reason := h.tasks.TakeInterruptContinueReason(conversationID)
 			prepNext, perr := h.prepareSessionAfterUserInterrupt(conversationID, assistantMessageID, reason, roleTools)
@@ -388,7 +397,9 @@ func (h *AgentHandler) MultiAgentLoop(c *gin.Context) {
 		strings.TrimSpace(req.Orchestration),
 	)
 	if runErr != nil {
-		h.persistEinoAgentTraceForResume(prep.ConversationID, result)
+		if shouldPersistEinoAgentTraceAfterRunError(baseCtx) {
+			h.persistEinoAgentTraceForResume(prep.ConversationID, result)
+		}
 		h.logger.Error("Eino DeepAgent 执行失败", zap.Error(runErr))
 		errMsg := "执行失败: " + runErr.Error()
 		if prep.AssistantMessageID != "" {

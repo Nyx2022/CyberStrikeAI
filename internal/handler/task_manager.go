@@ -17,6 +17,15 @@ var ErrUserInterruptContinue = errors.New("user interrupt with continue")
 // ErrTaskAlreadyRunning 会话已有任务正在执行
 var ErrTaskAlreadyRunning = errors.New("agent task already running for conversation")
 
+// shouldPersistEinoAgentTraceAfterRunError：Eino 相关 Run 非成功返回时，是否仍写入 last_react_* 供下轮 loadHistoryFromAgentTrace。
+// 用户主动停止（WithCancelCause(ErrTaskCancelled)）时不写入半截轨迹，避免下一轮 Plan-Execute 等因损坏/不完整 tool 上下文出现 no tool call 等异常。
+func shouldPersistEinoAgentTraceAfterRunError(baseCtx context.Context) bool {
+	if baseCtx == nil {
+		return true
+	}
+	return !errors.Is(context.Cause(baseCtx), ErrTaskCancelled)
+}
+
 // AgentTask 描述正在运行的Agent任务
 type AgentTask struct {
 	ConversationID string    `json:"conversationId"`

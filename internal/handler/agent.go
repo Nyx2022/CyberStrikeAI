@@ -725,7 +725,9 @@ func (h *AgentHandler) ProcessMessageForRobot(ctx context.Context, conversationI
 			"deep",
 		)
 		if errMA != nil {
-			h.persistEinoAgentTraceForResume(conversationID, resultMA)
+			if shouldPersistEinoAgentTraceAfterRunError(ctx) {
+				h.persistEinoAgentTraceForResume(conversationID, resultMA)
+			}
 			errMsg := "执行失败: " + errMA.Error()
 			if assistantMessageID != "" {
 				_, _ = h.db.Exec("UPDATE messages SET content = ?, updated_at = ? WHERE id = ?", errMsg, time.Now(), assistantMessageID)
@@ -2576,7 +2578,7 @@ func (h *AgentHandler) executeBatchQueue(queueID string) {
 			}
 
 			if runErr != nil {
-				if useRunResult {
+				if useRunResult && shouldPersistEinoAgentTraceAfterRunError(baseCtx) {
 					h.persistEinoAgentTraceForResume(conversationID, resultMA)
 				}
 				// 检查是否是取消错误
@@ -2630,16 +2632,6 @@ func (h *AgentHandler) executeBatchQueue(queueID string) {
 					_, errMsg := h.db.AddMessage(conversationID, "assistant", cancelMsg, nil)
 					if errMsg != nil {
 						h.logger.Warn("保存取消消息失败", zap.String("queueId", queueID), zap.String("taskId", task.ID), zap.Error(errMsg))
-					}
-				}
-				// 保存代理轨迹（如果存在）
-				if result != nil && (result.LastAgentTraceInput != "" || result.LastAgentTraceOutput != "") {
-					if err := h.db.SaveAgentTrace(conversationID, result.LastAgentTraceInput, result.LastAgentTraceOutput); err != nil {
-						h.logger.Warn("保存取消任务的代理轨迹失败", zap.String("queueId", queueID), zap.String("taskId", task.ID), zap.Error(err))
-					}
-				} else if useRunResult && resultMA != nil && (resultMA.LastAgentTraceInput != "" || resultMA.LastAgentTraceOutput != "") {
-					if err := h.db.SaveAgentTrace(conversationID, resultMA.LastAgentTraceInput, resultMA.LastAgentTraceOutput); err != nil {
-						h.logger.Warn("保存取消任务的代理轨迹失败", zap.String("queueId", queueID), zap.String("taskId", task.ID), zap.Error(err))
 					}
 				}
 				h.batchTaskManager.UpdateTaskStatusWithConversationID(queueID, task.ID, "cancelled", cancelMsg, "", conversationID)

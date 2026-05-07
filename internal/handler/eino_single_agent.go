@@ -123,7 +123,14 @@ func (h *AgentHandler) EinoSingleAgentLoopStream(c *gin.Context) {
 	roleTools := prep.RoleTools
 
 	taskStatus := "completed"
-	defer h.tasks.FinishTask(conversationID, taskStatus)
+	// 仅在成功 StartTask 后再 FinishTask。若 StartTask 因 ErrTaskAlreadyRunning 失败仍 defer FinishTask，
+	// 会误删其他连接上正在运行的同会话任务，导致「第一次拦截、第二次却放行」。
+	taskOwned := false
+	defer func() {
+		if taskOwned {
+			h.tasks.FinishTask(conversationID, taskStatus)
+		}
+	}()
 
 	sendEvent("progress", "正在启动 Eino ADK 单代理（ChatModelAgent）...", map[string]interface{}{
 		"conversationId": conversationID,
@@ -168,6 +175,7 @@ func (h *AgentHandler) EinoSingleAgentLoopStream(c *gin.Context) {
 				timeoutCancel()
 				return
 			}
+			taskOwned = true
 			firstRun = false
 		} else {
 			if err := h.tasks.ResetTaskCancelForContinue(conversationID, cancelWithCause); err != nil {
@@ -203,8 +211,10 @@ func (h *AgentHandler) EinoSingleAgentLoopStream(c *gin.Context) {
 			break
 		}
 
-		h.persistEinoAgentTraceForResume(conversationID, result)
 		cause := context.Cause(baseCtx)
+		if shouldPersistEinoAgentTraceAfterRunError(baseCtx) {
+			h.persistEinoAgentTraceForResume(conversationID, result)
+		}
 		if errors.Is(cause, ErrUserInterruptContinue) {
 			reason := h.tasks.TakeInterruptContinueReason(conversationID)
 			prepNext, perr := h.prepareSessionAfterUserInterrupt(conversationID, assistantMessageID, reason, roleTools)
@@ -374,7 +384,9 @@ func (h *AgentHandler) EinoSingleAgentLoop(c *gin.Context) {
 		progressCallback,
 	)
 	if runErr != nil {
-		h.persistEinoAgentTraceForResume(prep.ConversationID, result)
+		if shouldPersistEinoAgentTraceAfterRunError(baseCtx) {
+			h.persistEinoAgentTraceForResume(prep.ConversationID, result)
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": runErr.Error()})
 		return
 	}
