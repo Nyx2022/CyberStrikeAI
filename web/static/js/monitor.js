@@ -1222,6 +1222,32 @@ function handleStreamEvent(event, progressElement, progressId,
             });
             break;
         }
+
+        case 'eino_trace_run':
+        case 'eino_trace_start':
+        case 'eino_trace_end':
+        case 'eino_trace_error': {
+            const d = event.data || {};
+            const comp = d.component != null ? String(d.component) : '';
+            const name = d.name != null ? String(d.name) : '';
+            let glyph = '◆';
+            if (event.type === 'eino_trace_run') glyph = '●';
+            else if (event.type === 'eino_trace_start') glyph = '▶';
+            else if (event.type === 'eino_trace_end') glyph = '■';
+            else if (event.type === 'eino_trace_error') glyph = '✖';
+            const title = '[Eino] ' + glyph + ' ' + (comp || 'component') + (name ? '/' + name : '');
+            const parts = [];
+            if (d.runId) parts.push('run=' + String(d.runId));
+            if (d.spanId) parts.push('span=' + String(d.spanId));
+            if (d.parentSpanId) parts.push('parent=' + String(d.parentSpanId));
+            if (d.inputSummary) parts.push(String(d.inputSummary));
+            if (d.outputSummary) parts.push(String(d.outputSummary));
+            if (d.error) parts.push(String(d.error));
+            if (event.message && String(event.message).trim()) parts.push(String(event.message));
+            const body = parts.join(' · ');
+            addTimelineItem(timeline, 'progress', { title, message: body, data: d });
+            break;
+        }
             
         case 'thinking_stream_start':
         case 'reasoning_chain_stream_start': {
@@ -2544,6 +2570,8 @@ function addTimelineItem(timeline, type, options) {
                 ${escapeHtml(options.message || taskCancelledLabel)}
             </div>
         `;
+    } else if (type === 'progress' && options.message) {
+        content += `<div class="timeline-item-content timeline-eino-trace"><pre class="tool-result">${escapeHtml(options.message)}</pre></div>`;
     } else if (type === 'user_interrupt_continue' && options.message) {
         const streamBody = typeof formatTimelineStreamBody === 'function'
             ? formatTimelineStreamBody(options.message, options.data)
