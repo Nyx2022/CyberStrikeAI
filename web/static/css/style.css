@@ -3753,6 +3753,27 @@ header {
     background: rgba(21, 101, 192, 0.07);
 }
 
+.timeline-item-tool_call:has(.tool-result-section.success) {
+    border-left-color: var(--success-color);
+    background: rgba(40, 167, 69, 0.07);
+}
+
+.timeline-item-tool_call:has(.tool-result-section.error) {
+    border-left-color: var(--error-color);
+    background: rgba(220, 53, 69, 0.07);
+}
+
+.timeline-item-tool_call .tool-result-slot {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px dashed rgba(0, 0, 0, 0.12);
+}
+
+.timeline-item-tool_call .tool-result-section.pending .tool-result-pending {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
 .timeline-item-tool_result {
     border-left-color: #78909c;
     background: rgba(120, 144, 156, 0.06);

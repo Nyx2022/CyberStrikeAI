@@ -2357,6 +2357,9 @@ function renderProcessDetails(messageId, processDetails) {
     detailsContainer.dataset.lazyNotLoaded = '0';
     detailsContainer.dataset.loaded = '1';
     processDetails = dedupeConsecutiveProcessDetailRows(processDetails);
+    if (typeof window.coalesceProcessDetailsToolPairs === 'function') {
+        processDetails = window.coalesceProcessDetailsToolPairs(processDetails);
+    }
     // 如果没有processDetails或为空，显示空状态
     if (!processDetails || processDetails.length === 0) {
         // 显示空状态提示
@@ -2421,7 +2424,13 @@ function renderProcessDetails(messageId, processDetails) {
             const toolName = data.toolName || (typeof window.t === 'function' ? window.t('chat.unknownTool') : '未知工具');
             const index = data.index || 0;
             const total = data.total || 0;
-            itemTitle = agPx + '🔧 ' + (typeof window.t === 'function' ? window.t('chat.callTool', { name: escapeHtml(toolName), index: index, total: total }) : '调用工具: ' + escapeHtml(toolName) + ' (' + index + '/' + total + ')');
+            const argsHint = typeof window.toolCallArgHint === 'function'
+                ? window.toolCallArgHint(typeof window.parseToolCallArgsFromData === 'function' ? window.parseToolCallArgsFromData(data) : {})
+                : '';
+            const callTitle = typeof window.formatToolCallTimelineTitle === 'function'
+                ? window.formatToolCallTimelineTitle(toolName, index, total, argsHint)
+                : (typeof window.t === 'function' ? window.t('chat.callTool', { name: escapeHtml(toolName), index: index, total: total }) : '调用工具: ' + escapeHtml(toolName) + ' (' + index + '/' + total + ')');
+            itemTitle = agPx + '🔧 ' + callTitle;
         } else if (eventType === 'tool_result') {
             const toolName = data.toolName || (typeof window.t === 'function' ? window.t('chat.unknownTool') : '未知工具');
             const success = data.success !== false;
@@ -2451,12 +2460,16 @@ function renderProcessDetails(messageId, processDetails) {
                 : '⏸️ 用户中断并继续';
         }
         
-        addTimelineItem(timeline, eventType, {
+        const timelineOpts = {
             title: itemTitle,
             message: detail.message || '',
             data: data,
             createdAt: detail.createdAt // 传递实际的事件创建时间
-        });
+        };
+        if (eventType === 'tool_call' && data._mergedResult) {
+            timelineOpts.mergedResult = data._mergedResult;
+        }
+        addTimelineItem(timeline, eventType, timelineOpts);
     });
     
     // 检查是否有错误或取消事件，如果有，确保详情默认折叠（但仍有待审批 HITL 时保持展开，由 restoreHitlInlineForConversation 处理）
