@@ -26,6 +26,7 @@ type Config struct {
 	Security    SecurityConfig        `yaml:"security"`
 	Database    DatabaseConfig        `yaml:"database"`
 	Auth        AuthConfig            `yaml:"auth"`
+	Audit       AuditConfig           `yaml:"audit,omitempty" json:"audit,omitempty"`
 	ExternalMCP ExternalMCPConfig     `yaml:"external_mcp,omitempty"`
 	Knowledge   KnowledgeConfig       `yaml:"knowledge,omitempty"`
 	C2          C2Config              `yaml:"c2,omitempty" json:"c2,omitempty"` // 内置 C2 总开关；未配置时默认启用
@@ -575,6 +576,51 @@ type AuthConfig struct {
 	GeneratedPasswordPersistErr string `yaml:"-" json:"-"`
 }
 
+// AuditConfig platform operation audit log settings (not chat/tool execution bodies).
+type AuditConfig struct {
+	// Enabled nil or true enables persistence; explicit false disables.
+	Enabled             *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	RetentionDays  int `yaml:"retention_days,omitempty" json:"retention_days,omitempty"`
+	MaxDetailBytes int `yaml:"max_detail_bytes,omitempty" json:"max_detail_bytes,omitempty"`
+	// AuthFailureCooldownSeconds: per-IP cooldown for auth login/change_password failure audit rows; -1 disables; 0 uses default 60.
+	AuthFailureCooldownSeconds int `yaml:"auth_failure_cooldown_seconds,omitempty" json:"auth_failure_cooldown_seconds,omitempty"`
+}
+
+// EnabledEffective returns true unless audit.enabled is explicitly false.
+func (a AuditConfig) EnabledEffective() bool {
+	if a.Enabled == nil {
+		return true
+	}
+	return *a.Enabled
+}
+
+// RetentionDaysEffective returns retention; 0 means keep forever.
+func (a AuditConfig) RetentionDaysEffective() int {
+	if a.RetentionDays < 0 {
+		return 0
+	}
+	return a.RetentionDays
+}
+
+// MaxDetailBytesEffective caps serialized detail JSON size.
+func (a AuditConfig) MaxDetailBytesEffective() int {
+	if a.MaxDetailBytes <= 0 {
+		return 8192
+	}
+	return a.MaxDetailBytes
+}
+
+// AuthFailureCooldownEffective returns seconds between duplicate auth-failure audit rows per IP (default 60; -1 disables).
+func (a AuditConfig) AuthFailureCooldownEffective() int {
+	if a.AuthFailureCooldownSeconds < 0 {
+		return 0
+	}
+	if a.AuthFailureCooldownSeconds == 0 {
+		return 60
+	}
+	return a.AuthFailureCooldownSeconds
+}
+
 // ExternalMCPConfig 外部MCP配置
 type ExternalMCPConfig struct {
 	Servers map[string]ExternalMCPServerConfig `yaml:"servers,omitempty" json:"servers,omitempty"`
@@ -666,6 +712,9 @@ func Load(path string) (*Config, error) {
 
 	if cfg.Auth.SessionDurationHours <= 0 {
 		cfg.Auth.SessionDurationHours = 12
+	}
+	if cfg.Audit.MaxDetailBytes <= 0 {
+		cfg.Audit.MaxDetailBytes = 8192
 	}
 	if strings.TrimSpace(cfg.Auth.Password) == "" {
 		password, err := generateStrongPassword(24)
@@ -1170,6 +1219,14 @@ func Default() *Config {
 		Auth: AuthConfig{
 			SessionDurationHours: 12,
 		},
+		Audit: func() AuditConfig {
+			on := true
+			return AuditConfig{
+				RetentionDays:  90,
+				MaxDetailBytes: 8192,
+				Enabled:        &on,
+			}
+		}(),
 		Robots: RobotsConfig{
 			Session: RobotSessionConfig{
 				StrictUserIdentity: &strictRobotIdentity,
