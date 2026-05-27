@@ -12970,6 +12970,7 @@ header {
     align-items: center;
     border-radius: 8px;
     margin: 2px 0;
+    min-width: 0;
 }
 
 .webshell-tree-row.active {
@@ -13037,6 +13038,12 @@ header {
 }
 
 .webshell-tree-row.active .webshell-dir-item {
+    color: var(--accent-color);
+    font-weight: 600;
+}
+
+.webshell-tree-row.selected-file .webshell-dir-item {
+    background: rgba(0, 102, 255, 0.08);
     color: var(--accent-color);
     font-weight: 600;
 }
@@ -13237,6 +13244,11 @@ header {
     text-align: left;
     border-bottom: 1px solid var(--border-color);
     transition: background 0.15s ease;
+    min-width: 0;
+}
+
+.webshell-col-name {
+    min-width: 0;
 }
 
 .webshell-file-empty-state {
@@ -13256,6 +13268,15 @@ header {
     background: var(--bg-secondary);
 }
 
+.webshell-file-table tbody tr.webshell-file-row-selected {
+    background: rgba(0, 102, 255, 0.1);
+}
+
+.webshell-file-table tbody tr.webshell-file-row-selected a.webshell-file-link {
+    color: var(--accent-hover);
+    font-weight: 600;
+}
+
 .webshell-file-table tbody tr:last-child td {
     border-bottom: none;
 }
@@ -13267,6 +13288,12 @@ header {
     padding: 2px 4px;
     border-radius: 4px;
     transition: background 0.15s ease, color 0.15s ease;
+    display: inline-block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: middle;
 }
 
 .webshell-file-table a.webshell-file-link:hover {
@@ -13428,6 +13455,17 @@ header {
 
 .webshell-file-content {
     padding: 12px 0;
+}
+
+.webshell-file-content-path {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    padding: 8px 12px;
+    font-family: ui-monospace, monospace;
+    word-break: break-all;
+    background: var(--bg-secondary, rgba(0, 0, 0, 0.04));
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
 }
 
 .webshell-file-content .btn-ghost {
