@@ -417,6 +417,22 @@ function _normalizeUnicodeBulletMarkersToMdDash(segment) {
 }
 
 /**
+ * 修正模型常见的强调语法偏差：
+ * 1) 把 `\*\*文本\*\*` 还原为 `**文本**`（常见于多层转义输出）
+ * 2) 把 `** 文本 **` 收敛为 `**文本**`（避免分隔符内空格导致不生效）
+ * 仅处理单行内容，避免跨段落误匹配。
+ */
+function _normalizeEmphasisMarkersForMarkdown(segment) {
+    let s = String(segment);
+    s = s.replace(/\\\*\*([^\n*][^\n]*?[^\n*])\\\*\*/g, '**$1**');
+    s = s.replace(/\*\*\s+([^\n*][^\n]*?[^\n*])\s+\*\*/g, '**$1**');
+    // marked 在「中文紧邻 ** 且加粗内容首字符是引号/书名号」时常不触发 strong。
+    // 仅对“有闭合 ** 的同一行片段”补一个空格，尽量减少误判面。
+    s = s.replace(/([\u4e00-\u9fff])\*\*([“"‘'《（(][^\n*]*?\*\*)/g, '$1 **$2');
+    return s;
+}
+
+/**
  * 解析前归一化助手 Markdown：去掉零宽字符，NFKC 将全角 * ` _ 等转为 ASCII，
  * 避免 marked 无法识别强调/行内代码而原样显示 **、反引号；
  * 并移除 &lt;redacted_thinking&gt; 等伪 XML 思考块、修正块级 HTML（`<div>`/`<p>`/…、`<ul>`/`<li>`）与 Unicode 项目符号 `•`，避免块级 HTML 吞掉 inline 解析。
@@ -432,6 +448,7 @@ function normalizeAssistantMarkdownSource(text) {
     } catch (e) {
         /* ignore */
     }
+    s = _normalizeEmphasisMarkersForMarkdown(s);
     s = _stripXmlReasoningWrappersForMarkdown(s);
     const fb = _maskFencedCodeBlocksForMdPreprocess(s);
     s = _unwrapHtmlBlockWrappersForMarkdown(fb.masked);
