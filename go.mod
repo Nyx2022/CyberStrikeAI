@@ -17,6 +17,7 @@ require (
 	github.com/cloudwego/eino-ext/components/embedding/openai v0.0.0-20260427010451-749e3706378b
 	github.com/cloudwego/eino-ext/components/model/openai v0.1.13
 	github.com/creack/pty v1.1.24
+	github.com/disintegration/imaging v1.6.2
 	github.com/eino-contrib/jsonschema v1.0.3
 	github.com/gin-gonic/gin v1.9.1
 	github.com/google/uuid v1.6.0
@@ -49,7 +50,6 @@ require (
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
 	github.com/cloudwego/eino-ext/libs/acl/openai v0.1.17 // indirect
-	github.com/disintegration/imaging v1.6.2 // indirect
 	github.com/dlclark/regexp2 v1.10.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/evanphx/json-patch v0.5.2 // indirect
