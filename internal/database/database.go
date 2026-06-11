@@ -357,7 +357,7 @@ func (db *DB) initTables() error {
 	createVulnerabilitiesTable := `
 	CREATE TABLE IF NOT EXISTS vulnerabilities (
 		id TEXT PRIMARY KEY,
-		conversation_id TEXT NOT NULL,
+		conversation_id TEXT,
 		conversation_tag TEXT,
 		task_tag TEXT,
 		title TEXT NOT NULL,
@@ -371,7 +371,8 @@ func (db *DB) initTables() error {
 		recommendation TEXT,
 		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+		project_id TEXT,
+		FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE SET NULL
 	);`
 
 	// 创建批量任务队列表
@@ -736,6 +737,9 @@ func (db *DB) initTables() error {
 	if err := db.migrateVulnerabilitiesTable(); err != nil {
 		db.logger.Warn("迁移vulnerabilities表失败", zap.Error(err))
 		// 不返回错误，允许继续运行
+	}
+	if err := db.migrateVulnerabilitiesConversationFK(); err != nil {
+		db.logger.Warn("迁移vulnerabilities会话外键失败", zap.Error(err))
 	}
 
 	if err := db.migrateProjectsTable(); err != nil {
@@ -1144,6 +1148,116 @@ func (db *DB) migrateProjectsTable() error {
 func (db *DB) dropProjectFactVersionsTable() error {
 	_, err := db.Exec(`DROP TABLE IF EXISTS project_fact_versions`)
 	return err
+}
+
+// migrateVulnerabilitiesConversationFK 将 vulnerabilities.conversation_id 外键改为 ON DELETE SET NULL，删除对话时保留漏洞记录。
+func (db *DB) migrateVulnerabilitiesConversationFK() error {
+	ok, err := vulnerabilitiesConversationFKOnDeleteSetNull(db.DB)
+	if err != nil {
+		return err
+	}
+	if ok {
+		return nil
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("开启事务失败: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	const createNew = `
+	CREATE TABLE vulnerabilities_new (
+		id TEXT PRIMARY KEY,
+		conversation_id TEXT,
+		conversation_tag TEXT,
+		task_tag TEXT,
+		title TEXT NOT NULL,
+		description TEXT,
+		severity TEXT NOT NULL,
+		status TEXT NOT NULL DEFAULT 'open',
+		vulnerability_type TEXT,
+		target TEXT,
+		proof TEXT,
+		impact TEXT,
+		recommendation TEXT,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		project_id TEXT,
+		FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE SET NULL
+	);`
+	if _, err := tx.Exec(createNew); err != nil {
+		return fmt.Errorf("创建 vulnerabilities_new 失败: %w", err)
+	}
+
+	const copyRows = `
+	INSERT INTO vulnerabilities_new (
+		id, conversation_id, conversation_tag, task_tag, title, description,
+		severity, status, vulnerability_type, target, proof, impact, recommendation,
+		created_at, updated_at, project_id
+	)
+	SELECT
+		id, conversation_id, conversation_tag, task_tag, title, description,
+		severity, status, vulnerability_type, target, proof, impact, recommendation,
+		created_at, updated_at, project_id
+	FROM vulnerabilities;`
+	if _, err := tx.Exec(copyRows); err != nil {
+		return fmt.Errorf("复制 vulnerabilities 数据失败: %w", err)
+	}
+	if _, err := tx.Exec(`DROP TABLE vulnerabilities`); err != nil {
+		return fmt.Errorf("删除旧 vulnerabilities 表失败: %w", err)
+	}
+	if _, err := tx.Exec(`ALTER TABLE vulnerabilities_new RENAME TO vulnerabilities`); err != nil {
+		return fmt.Errorf("重命名 vulnerabilities 表失败: %w", err)
+	}
+
+	indexes := []string{
+		`CREATE INDEX IF NOT EXISTS idx_vulnerabilities_conversation_id ON vulnerabilities(conversation_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_vulnerabilities_conversation_tag ON vulnerabilities(conversation_tag)`,
+		`CREATE INDEX IF NOT EXISTS idx_vulnerabilities_task_tag ON vulnerabilities(task_tag)`,
+		`CREATE INDEX IF NOT EXISTS idx_vulnerabilities_severity ON vulnerabilities(severity)`,
+		`CREATE INDEX IF NOT EXISTS idx_vulnerabilities_status ON vulnerabilities(status)`,
+		`CREATE INDEX IF NOT EXISTS idx_vulnerabilities_created_at ON vulnerabilities(created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_vulnerabilities_project_id ON vulnerabilities(project_id)`,
+	}
+	for _, stmt := range indexes {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("重建 vulnerabilities 索引失败: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("提交 vulnerabilities 外键迁移失败: %w", err)
+	}
+	db.logger.Info("vulnerabilities 表已迁移：删除对话时保留漏洞记录")
+	return nil
+}
+
+func vulnerabilitiesConversationFKOnDeleteSetNull(db *sql.DB) (bool, error) {
+	rows, err := db.Query(`PRAGMA foreign_key_list(vulnerabilities)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	found := false
+	for rows.Next() {
+		var id, seq int
+		var table, from, to, onUpdate, onDelete, match string
+		if err := rows.Scan(&id, &seq, &table, &from, &to, &onUpdate, &onDelete, &match); err != nil {
+			return false, err
+		}
+		if from == "conversation_id" {
+			found = true
+			if !strings.EqualFold(onDelete, "SET NULL") {
+				return false, nil
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return found, nil
 }
 
 // migrateVulnerabilitiesTable 迁移 vulnerabilities 表，补充标签字段

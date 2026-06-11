@@ -1344,7 +1344,7 @@ func (h *OpenAPIHandler) GetOpenAPISpec(c *gin.Context) {
 				"delete": map[string]interface{}{
 					"tags":        []string{"对话管理"},
 					"summary":     "删除对话",
-					"description": "删除指定的对话及其所有相关数据（消息、漏洞等）。**此操作不可恢复**。",
+					"description": "删除指定的对话及其会话数据（消息、攻击链等）。**漏洞记录会保留**，仅解除与会话的关联。**此操作不可恢复**。",
 					"operationId": "deleteConversation",
 					"parameters": []map[string]interface{}{
 						{

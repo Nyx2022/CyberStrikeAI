@@ -543,18 +543,28 @@ func (db *DB) UpdateConversationTime(id string) error {
 	return nil
 }
 
-// DeleteConversation 删除对话及其所有相关数据
+// DeleteConversation 删除对话及其会话相关数据。
 // 由于数据库外键约束设置了 ON DELETE CASCADE，删除对话时会自动删除：
 // - messages（消息）
 // - process_details（过程详情）
 // - attack_chain_nodes（攻击链节点）
 // - attack_chain_edges（攻击链边）
-// - vulnerabilities（漏洞）
 // - conversation_group_mappings（分组映射）
-// 注意：knowledge_retrieval_logs 使用 ON DELETE SET NULL，记录会保留但 conversation_id 会被设为 NULL
+// 漏洞记录会保留：vulnerabilities.conversation_id 使用 ON DELETE SET NULL，仅解除与会话的关联。
+// 注意：knowledge_retrieval_logs 在删除前会被显式清理。
 func (db *DB) DeleteConversation(id string) error {
+	// 删除对话前补全漏洞来源标签，便于在漏洞库中追溯已删除会话的发现。
+	_, err := db.Exec(`
+		UPDATE vulnerabilities
+		SET conversation_tag = COALESCE(NULLIF(TRIM(conversation_tag), ''), (SELECT title FROM conversations WHERE id = ?))
+		WHERE conversation_id = ?
+	`, id, id)
+	if err != nil {
+		db.logger.Warn("更新漏洞来源标签失败", zap.String("conversationId", id), zap.Error(err))
+	}
+
 	// 显式删除知识检索日志（虽然外键是SET NULL，但为了彻底清理，我们手动删除）
-	_, err := db.Exec("DELETE FROM knowledge_retrieval_logs WHERE conversation_id = ?", id)
+	_, err = db.Exec("DELETE FROM knowledge_retrieval_logs WHERE conversation_id = ?", id)
 	if err != nil {
 		db.logger.Warn("删除知识检索日志失败", zap.String("conversationId", id), zap.Error(err))
 		// 不返回错误，继续删除对话
@@ -567,7 +577,7 @@ func (db *DB) DeleteConversation(id string) error {
 	}
 	db.removeConversationScopedDirs(id)
 
-	db.logger.Info("对话及其所有相关数据已删除", zap.String("conversationId", id))
+	db.logger.Info("对话已删除（漏洞记录已保留）", zap.String("conversationId", id))
 	return nil
 }
 
