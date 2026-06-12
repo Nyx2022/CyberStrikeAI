@@ -298,7 +298,7 @@ func (h *ConfigHandler) GetConfig(c *gin.Context) {
 		}
 	}
 
-	// 获取外部MCP工具
+	// 获取外部MCP工具（走缓存，持锁期间通常不阻塞）
 	if h.externalMCPMgr != nil {
 		ctx := context.Background()
 		externalTools := h.getExternalMCPTools(ctx)
@@ -359,9 +359,6 @@ type GetToolsResponse struct {
 
 // GetTools 获取工具列表（支持分页和搜索）
 func (h *ConfigHandler) GetTools(c *gin.Context) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
 	c.Header("Cache-Control", "no-store, no-cache, must-revalidate")
 
 	// 解析分页参数
@@ -407,12 +404,37 @@ func (h *ConfigHandler) GetTools(c *gin.Context) {
 		}
 	}
 
+	includeExternal := true
+	if v := strings.TrimSpace(strings.ToLower(c.Query("include_external"))); v == "0" || v == "false" || v == "no" {
+		includeExternal = false
+	}
+	refreshExternal := false
+	if v := strings.TrimSpace(strings.ToLower(c.Query("refresh_external"))); v == "1" || v == "true" || v == "yes" {
+		refreshExternal = true
+	}
+
+	// 按外部 MCP 名称筛选（MCP 管理页左侧卡片 → 右侧工具列表联动）
+	externalMCPFilter := strings.TrimSpace(c.Query("external_mcp"))
+
+	// 快照配置后立即释放锁，避免外部 MCP 网络 IO 阻塞整个配置子系统
+	h.mu.RLock()
+	securityTools := append([]config.ToolConfig(nil), h.config.Security.Tools...)
+	roles := h.config.Roles
+	toolDescriptionMode := h.config.Security.ToolDescriptionMode
+	mcpServer := h.mcpServer
+	externalMCPMgr := h.externalMCPMgr
+	h.mu.RUnlock()
+
+	pickDesc := func(shortDesc, fullDesc string) string {
+		return pickToolDescriptionWithMode(toolDescriptionMode, shortDesc, fullDesc)
+	}
+
 	// 解析角色参数，用于过滤工具并标注启用状态
 	roleName := c.Query("role")
 	var roleToolsSet map[string]bool // 角色配置的工具集合
 	var roleUsesAllTools bool = true // 角色是否使用所有工具（默认角色）
-	if roleName != "" && roleName != "默认" && h.config.Roles != nil {
-		if role, exists := h.config.Roles[roleName]; exists && role.Enabled {
+	if roleName != "" && roleName != "默认" && roles != nil {
+		if role, exists := roles[roleName]; exists && role.Enabled {
 			if len(role.Tools) > 0 {
 				// 角色配置了工具列表，只使用这些工具
 				roleToolsSet = make(map[string]bool)
@@ -426,12 +448,12 @@ func (h *ConfigHandler) GetTools(c *gin.Context) {
 
 	// 获取所有内部工具并应用搜索过滤
 	configToolMap := make(map[string]bool)
-	allTools := make([]ToolConfigInfo, 0, len(h.config.Security.Tools))
-	for _, tool := range h.config.Security.Tools {
+	allTools := make([]ToolConfigInfo, 0, len(securityTools))
+	for _, tool := range securityTools {
 		configToolMap[tool.Name] = true
 		toolInfo := ToolConfigInfo{
 			Name:        tool.Name,
-			Description: h.pickToolDescription(tool.ShortDescription, tool.Description),
+			Description: pickDesc(tool.ShortDescription, tool.Description),
 			Enabled:     tool.Enabled,
 			IsExternal:  false,
 		}
@@ -479,15 +501,15 @@ func (h *ConfigHandler) GetTools(c *gin.Context) {
 	}
 
 	// 从MCP服务器获取所有已注册的工具（包括直接注册的工具，如知识检索工具）
-	if h.mcpServer != nil {
-		mcpTools := h.mcpServer.GetAllTools()
+	if mcpServer != nil {
+		mcpTools := mcpServer.GetAllTools()
 		for _, mcpTool := range mcpTools {
 			// 跳过已经在配置文件中的工具（避免重复）
 			if configToolMap[mcpTool.Name] {
 				continue
 			}
 
-			description := h.pickToolDescription(mcpTool.ShortDescription, mcpTool.Description)
+			description := pickDesc(mcpTool.ShortDescription, mcpTool.Description)
 
 			toolInfo := ToolConfigInfo{
 				Name:        mcpTool.Name,
@@ -534,11 +556,13 @@ func (h *ConfigHandler) GetTools(c *gin.Context) {
 		}
 	}
 
-	// 获取外部MCP工具
-	if h.externalMCPMgr != nil {
-		// 创建context用于获取外部工具
+	// 获取外部MCP工具（可走缓存，不持有 config 锁）
+	if includeExternal && externalMCPMgr != nil {
+		if refreshExternal {
+			externalMCPMgr.InvalidateAllToolCaches()
+		}
 		ctx := context.Background()
-		externalTools := h.getExternalMCPTools(ctx)
+		externalTools := h.getExternalMCPToolsWithManager(ctx, externalMCPMgr, pickDesc)
 
 		// 应用搜索过滤和角色配置
 		for _, toolInfo := range externalTools {
@@ -584,6 +608,16 @@ func (h *ConfigHandler) GetTools(c *gin.Context) {
 	// 如果角色配置了工具列表，过滤工具（只保留列表中的工具，但保留其他工具并标记为禁用）
 	// 注意：这里我们不直接过滤掉工具，而是保留所有工具，但通过 role_enabled 字段标注状态
 	// 这样前端可以显示所有工具，并标注哪些工具在当前角色中可用
+
+	if externalMCPFilter != "" {
+		filtered := make([]ToolConfigInfo, 0)
+		for _, tool := range allTools {
+			if tool.IsExternal && tool.ExternalMCP == externalMCPFilter {
+				filtered = append(filtered, tool)
+			}
+		}
+		allTools = filtered
+	}
 
 	// 统一按名称排序后再分页，避免配置文件中顺序导致「全部」与「仅已启用」前几页看起来完全一致
 	sort.SliceStable(allTools, func(i, j int) bool {
@@ -1906,50 +1940,52 @@ func setFloatInMap(mapNode *yaml.Node, key string, value float64) {
 }
 
 // getExternalMCPTools 获取外部MCP工具列表（公共方法）
-// 返回 ToolConfigInfo 列表，已处理启用状态和描述信息
 func (h *ConfigHandler) getExternalMCPTools(ctx context.Context) []ToolConfigInfo {
-	var result []ToolConfigInfo
-
 	if h.externalMCPMgr == nil {
+		return nil
+	}
+	return h.getExternalMCPToolsWithManager(ctx, h.externalMCPMgr, h.pickToolDescription)
+}
+
+// getExternalMCPToolsWithManager 获取外部 MCP 工具（不持有 config 锁，供 GetTools 等热路径使用）
+func (h *ConfigHandler) getExternalMCPToolsWithManager(
+	ctx context.Context,
+	mgr *mcp.ExternalMCPManager,
+	pickDesc func(shortDesc, fullDesc string) string,
+) []ToolConfigInfo {
+	var result []ToolConfigInfo
+	if mgr == nil {
 		return result
 	}
 
-	// 使用较短的超时时间（5秒）进行快速失败，避免阻塞页面加载
 	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	externalTools, err := h.externalMCPMgr.GetAllTools(timeoutCtx)
+	externalTools, err := mgr.GetAllTools(timeoutCtx)
 	if err != nil {
-		// 记录警告但不阻塞，继续返回已缓存的工具（如果有）
 		h.logger.Warn("获取外部MCP工具失败（可能连接断开），尝试返回缓存的工具",
 			zap.Error(err),
 			zap.String("hint", "如果外部MCP工具未显示，请检查连接状态或点击刷新按钮"),
 		)
 	}
 
-	// 如果获取到了工具（即使有错误），继续处理
 	if len(externalTools) == 0 {
 		return result
 	}
 
-	externalMCPConfigs := h.externalMCPMgr.GetConfigs()
+	externalMCPConfigs := mgr.GetConfigs()
 
 	for _, externalTool := range externalTools {
-		// 解析工具名称：mcpName::toolName
 		mcpName, actualToolName := h.parseExternalToolName(externalTool.Name)
 		if mcpName == "" || actualToolName == "" {
-			continue // 跳过格式不正确的工具
+			continue
 		}
 
-		// 计算启用状态
-		enabled := h.calculateExternalToolEnabled(mcpName, actualToolName, externalMCPConfigs)
-
-		// 处理描述信息
-		description := h.pickToolDescription(externalTool.ShortDescription, externalTool.Description)
+		enabled := h.calculateExternalToolEnabledWithManager(mcpName, actualToolName, externalMCPConfigs, mgr)
 
 		result = append(result, ToolConfigInfo{
 			Name:        actualToolName,
-			Description: description,
+			Description: pickDesc(externalTool.ShortDescription, externalTool.Description),
 			Enabled:     enabled,
 			IsExternal:  true,
 			ExternalMCP: mcpName,
@@ -1970,40 +2006,48 @@ func (h *ConfigHandler) parseExternalToolName(fullName string) (mcpName, toolNam
 
 // calculateExternalToolEnabled 计算外部工具的启用状态
 func (h *ConfigHandler) calculateExternalToolEnabled(mcpName, toolName string, configs map[string]config.ExternalMCPServerConfig) bool {
+	return h.calculateExternalToolEnabledWithManager(mcpName, toolName, configs, h.externalMCPMgr)
+}
+
+func (h *ConfigHandler) calculateExternalToolEnabledWithManager(
+	mcpName, toolName string,
+	configs map[string]config.ExternalMCPServerConfig,
+	mgr *mcp.ExternalMCPManager,
+) bool {
 	cfg, exists := configs[mcpName]
 	if !exists {
 		return false
 	}
 
-	// 首先检查外部MCP是否启用
 	if !cfg.ExternalMCPEnable {
-		return false // MCP未启用，所有工具都禁用
+		return false
 	}
 
-	// MCP已启用，检查单个工具的启用状态
-	// 如果ToolEnabled为空或未设置该工具，默认为启用（向后兼容）
-	if cfg.ToolEnabled == nil {
-		// 未设置工具状态，默认为启用
-	} else if toolEnabled, exists := cfg.ToolEnabled[toolName]; exists {
-		// 使用配置的工具状态
-		if !toolEnabled {
+	if cfg.ToolEnabled != nil {
+		if toolEnabled, exists := cfg.ToolEnabled[toolName]; exists && !toolEnabled {
 			return false
 		}
 	}
-	// 工具未在配置中，默认为启用
 
-	// 最后检查外部MCP是否已连接
-	client, exists := h.externalMCPMgr.GetClient(mcpName)
+	if mgr == nil {
+		return false
+	}
+	client, exists := mgr.GetClient(mcpName)
 	if !exists || !client.IsConnected() {
-		return false // 未连接时视为禁用
+		return false
 	}
 
 	return true
 }
 
-// pickToolDescription 根据 security.tool_description_mode 选择 short 或 full 描述并限制长度
+// pickToolDescription 根据 security.tool_description_mode 选择 short 或 full 描述并限制长度。
+// 调用方若已持有 h.mu 读锁，须直接读 mode 并调用 pickToolDescriptionWithMode，避免嵌套 RLock 死锁。
 func (h *ConfigHandler) pickToolDescription(shortDesc, fullDesc string) string {
-	useFull := strings.TrimSpace(strings.ToLower(h.config.Security.ToolDescriptionMode)) == "full"
+	return pickToolDescriptionWithMode(h.config.Security.ToolDescriptionMode, shortDesc, fullDesc)
+}
+
+func pickToolDescriptionWithMode(mode, shortDesc, fullDesc string) string {
+	useFull := strings.TrimSpace(strings.ToLower(mode)) == "full"
 	description := shortDesc
 	if useFull {
 		description = fullDesc
@@ -2018,23 +2062,22 @@ func (h *ConfigHandler) pickToolDescription(shortDesc, fullDesc string) string {
 
 // GetToolSchema 获取单个工具的 inputSchema（按需加载，避免列表接口返回大量 schema 数据）
 func (h *ConfigHandler) GetToolSchema(c *gin.Context) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
 	toolName := c.Param("name")
 	if toolName == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "工具名称不能为空"})
 		return
 	}
 
-	// 检查是否为外部工具（格式：mcpName::toolName）
 	externalMCP := c.Query("external_mcp")
 	if externalMCP != "" {
-		// 外部 MCP 工具
-		if h.externalMCPMgr != nil {
+		h.mu.RLock()
+		externalMCPMgr := h.externalMCPMgr
+		h.mu.RUnlock()
+
+		if externalMCPMgr != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			externalTools, _ := h.externalMCPMgr.GetAllTools(ctx)
+			externalTools, _ := externalMCPMgr.GetAllTools(ctx)
 			fullName := externalMCP + "::" + toolName
 			for _, t := range externalTools {
 				if t.Name == fullName {
@@ -2047,8 +2090,12 @@ func (h *ConfigHandler) GetToolSchema(c *gin.Context) {
 		return
 	}
 
-	// 内部工具：从 YAML 配置的 Parameters 构建
-	for _, tool := range h.config.Security.Tools {
+	h.mu.RLock()
+	securityTools := append([]config.ToolConfig(nil), h.config.Security.Tools...)
+	mcpServer := h.mcpServer
+	h.mu.RUnlock()
+
+	for _, tool := range securityTools {
 		if tool.Name == toolName {
 			c.JSON(http.StatusOK, gin.H{"input_schema": buildInputSchemaFromParams(tool.Parameters)})
 			return
@@ -2056,8 +2103,8 @@ func (h *ConfigHandler) GetToolSchema(c *gin.Context) {
 	}
 
 	// MCP 注册工具（如知识检索）
-	if h.mcpServer != nil {
-		for _, mt := range h.mcpServer.GetAllTools() {
+	if mcpServer != nil {
+		for _, mt := range mcpServer.GetAllTools() {
 			if mt.Name == toolName {
 				c.JSON(http.StatusOK, gin.H{"input_schema": mt.InputSchema})
 				return

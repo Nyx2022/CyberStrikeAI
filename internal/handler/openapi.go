@@ -237,7 +237,7 @@ func (h *OpenAPIHandler) GetOpenAPISpec(c *gin.Context) {
 						"status": map[string]interface{}{
 							"type":        "string",
 							"description": "状态",
-							"enum":        []string{"open", "closed", "fixed"},
+							"enum":        []string{"open", "confirmed", "fixed", "false_positive", "ignored"},
 						},
 						"target": map[string]interface{}{
 							"type":        "string",
@@ -575,7 +575,7 @@ func (h *OpenAPIHandler) GetOpenAPISpec(c *gin.Context) {
 						"status": map[string]interface{}{
 							"type":        "string",
 							"description": "状态",
-							"enum":        []string{"open", "closed", "fixed"},
+							"enum":        []string{"open", "confirmed", "fixed", "false_positive", "ignored"},
 						},
 						"type": map[string]interface{}{
 							"type":        "string",
