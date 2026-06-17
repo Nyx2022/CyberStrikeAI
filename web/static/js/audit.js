@@ -52,22 +52,74 @@ function auditActionLabel(action) {
     return auditT('settingsAudit.act.' + action, null, action);
 }
 
+function auditLocale() {
+    if (typeof window.__locale === 'string' && window.__locale.length) {
+        return window.__locale.startsWith('zh') ? 'zh-CN' : 'en-US';
+    }
+    return (typeof navigator !== 'undefined' && navigator.language) ? navigator.language : 'en-US';
+}
+
+function auditTimezoneShortLabel() {
+    try {
+        const parts = new Intl.DateTimeFormat(auditLocale(), { timeZoneName: 'short' }).formatToParts(new Date());
+        const tz = parts.find(function (p) { return p.type === 'timeZoneName'; });
+        return tz ? tz.value : '';
+    } catch (_) {
+        return '';
+    }
+}
+
 function formatAuditTime(iso) {
     if (!iso) return '';
     try {
         const d = new Date(iso);
         if (Number.isNaN(d.getTime())) return iso;
-        return d.toLocaleString();
+        return d.toLocaleString(auditLocale(), {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false,
+            timeZoneName: 'short'
+        });
     } catch (_) {
         return iso;
     }
 }
 
+/** Read stored local datetime (YYYY-MM-DDTHH:mm) from custom picker or raw input. */
+function getAuditFilterDatetimeValue(inputId) {
+    if (typeof window.AuditDatetimePicker !== 'undefined' && typeof window.AuditDatetimePicker.getValue === 'function') {
+        return window.AuditDatetimePicker.getValue(inputId) || '';
+    }
+    var el = document.getElementById(inputId);
+    return el ? (el.value || '') : '';
+}
+
+/** datetime-local / picker storage -> UTC RFC3339 for API. */
 function auditDatetimeLocalToRFC3339(value) {
     if (!value || !value.trim()) return '';
-    const d = new Date(value);
+    const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(value.trim());
+    if (!m) return '';
+    const d = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], 0, 0);
     if (Number.isNaN(d.getTime())) return '';
     return d.toISOString();
+}
+
+function updateAuditTimezoneHint() {
+    const el = document.getElementById('audit-filter-timezone-hint');
+    if (!el) return;
+    const tz = auditTimezoneShortLabel();
+    if (!tz) {
+        el.hidden = true;
+        el.textContent = '';
+        return;
+    }
+    el.hidden = false;
+    el.textContent = auditT('settingsAudit.filterTimeZone', { tz: tz },
+        '时区：' + tz + '（筛选按浏览器本地时间，API 使用 UTC）');
 }
 
 function initAuditPageSizeFromStorage() {
@@ -113,6 +165,7 @@ function rebuildAuditActionSelect() {
         actEl.disabled = true;
         actEl.value = '';
         actEl.title = hint;
+        syncAuditCustomSelect('audit-filter-action');
         return;
     }
 
@@ -129,6 +182,7 @@ function rebuildAuditActionSelect() {
     if (prev && Array.prototype.some.call(actEl.options, function (o) { return o.value === prev; })) {
         actEl.value = prev;
     }
+    syncAuditCustomSelect('audit-filter-action');
 }
 
 function onAuditCategoryFilterChange() {
@@ -145,41 +199,15 @@ function buildAuditQueryParams(forExport) {
     const act = document.getElementById('audit-filter-action');
     const res = document.getElementById('audit-filter-result');
     const q = document.getElementById('audit-filter-q');
-    const since = document.getElementById('audit-filter-since');
-    const until = document.getElementById('audit-filter-until');
     if (cat && cat.value) params.set('category', cat.value);
     if (act && !act.disabled && act.value) params.set('action', act.value);
     if (res && res.value) params.set('result', res.value);
     if (q && q.value.trim()) params.set('q', q.value.trim());
-    const sinceISO = since ? auditDatetimeLocalToRFC3339(since.value) : '';
-    const untilISO = until ? auditDatetimeLocalToRFC3339(until.value) : '';
+    const sinceISO = auditDatetimeLocalToRFC3339(getAuditFilterDatetimeValue('audit-filter-since'));
+    const untilISO = auditDatetimeLocalToRFC3339(getAuditFilterDatetimeValue('audit-filter-until'));
     if (sinceISO) params.set('since', sinceISO);
     if (untilISO) params.set('until', untilISO);
     return params.toString();
-}
-
-async function loadAuditMeta() {
-    if (typeof apiFetch !== 'function') return;
-    const hint = document.getElementById('audit-retention-hint');
-    try {
-        const r = await apiFetch('/api/audit/meta');
-        if (!r.ok) return;
-        const data = await r.json();
-        if (!hint) return;
-        if (!data.enabled) {
-            hint.hidden = false;
-            hint.textContent = auditT('settingsAudit.disabledHint', null, '审计功能已关闭，新操作不会写入审计表。');
-            return;
-        }
-        const days = data.retention_days;
-        if (days > 0) {
-            hint.hidden = false;
-            hint.textContent = auditT('settingsAudit.retentionHint', { days: days },
-                '审计记录保留 ' + days + ' 天，超期自动清理。');
-        } else {
-            hint.hidden = true;
-        }
-    } catch (_) { /* ignore */ }
 }
 
 async function loadAuditSummary() {
@@ -191,10 +219,14 @@ async function loadAuditSummary() {
         const data = await r.json();
         if (wrap) wrap.hidden = false;
         const elTotal = document.getElementById('audit-stat-total');
+        const elSuccess = document.getElementById('audit-stat-success');
         const elFail = document.getElementById('audit-stat-failures');
         const elRecent = document.getElementById('audit-stat-recent');
-        if (elTotal) elTotal.textContent = String(data.total != null ? data.total : 0);
-        if (elFail) elFail.textContent = String(data.failures != null ? data.failures : 0);
+        const total = data.total != null ? data.total : 0;
+        const failures = data.failures != null ? data.failures : 0;
+        if (elTotal) elTotal.textContent = String(total);
+        if (elSuccess) elSuccess.textContent = String(Math.max(0, total - failures));
+        if (elFail) elFail.textContent = String(failures);
         if (elRecent) elRecent.textContent = String(data.recent_7d != null ? data.recent_7d : 0);
     } catch (_) { /* ignore */ }
 }
@@ -234,37 +266,57 @@ async function loadAuditLogs(page) {
     }
 }
 
+function auditResultTagClass(result) {
+    return result === 'failure' ? 'audit-tag--fail' : 'audit-tag--ok';
+}
+
 function renderAuditLogs(logs) {
     const listEl = document.getElementById('audit-log-list');
     if (!listEl) return;
     const esc = typeof escapeHtml === 'function' ? escapeHtml : function (s) { return String(s || ''); };
     if (!logs.length) {
-        listEl.innerHTML = '<div class="c2-empty">' + esc(auditT('settingsAudit.empty', null, '暂无审计记录')) + '</div>';
+        listEl.innerHTML = '<div class="audit-log-empty">' + esc(auditT('settingsAudit.empty', null, '暂无审计记录')) + '</div>';
         return;
     }
-    listEl.innerHTML = logs.map(function (log) {
-        const lvl = log.result === 'failure' ? 'warn' : (log.level || 'info');
+    const dash = '<span class="audit-log-cell-muted">—</span>';
+    const head = (
+        '<div class="audit-log-table-wrap">' +
+        '<table class="audit-log-table">' +
+        '<thead><tr>' +
+        '<th data-i18n="settingsAudit.colTime">时间</th>' +
+        '<th data-i18n="settingsAudit.colMessage">说明</th>' +
+        '<th data-i18n="settingsAudit.colCategory">类别</th>' +
+        '<th data-i18n="settingsAudit.colAction">操作</th>' +
+        '<th data-i18n="settingsAudit.colResult">结果</th>' +
+        '<th data-i18n="settingsAudit.colIp">IP</th>' +
+        '<th data-i18n="settingsAudit.colResource">资源 ID</th>' +
+        '</tr></thead><tbody>'
+    );
+    const rows = logs.map(function (log) {
         const catLabel = esc(auditCategoryLabel(log.category || ''));
         const actionLabel = esc(auditActionLabel(log.action || ''));
         const msg = esc(log.message || '');
         const ip = esc(log.clientIp || '');
         const when = esc(formatAuditTime(log.createdAt));
         const res = esc(log.result || '');
-        const rid = log.resourceId || '';
-        const meta = rid ? (' · ' + esc(rid)) : '';
+        const rid = log.resourceId ? esc(log.resourceId) : '';
         const eid = esc(log.id || '');
+        const resultCls = auditResultTagClass(log.result || '');
+        const rowClick = 'onclick="showAuditLogDetail(\'' + eid + '\')" ' +
+            'onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();showAuditLogDetail(\'' + eid + '\')}"';
         return (
-            '<div class="c2-event-item audit-log-item" role="button" tabindex="0" ' +
-            'onclick="showAuditLogDetail(\'' + eid + '\')" ' +
-            'onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();showAuditLogDetail(\'' + eid + '\')}">' +
-            '<div class="c2-event-level ' + esc(lvl) + '"></div>' +
-            '<div class="c2-event-content">' +
-            '<div class="c2-event-message">' + msg + '</div>' +
-            '<div class="c2-event-meta">' + when + ' · ' + catLabel + '/' + actionLabel + ' · ' + res + meta +
-            (ip ? ' · IP ' + ip : '') +
-            '</div></div></div>'
+            '<tr class="audit-log-row" role="button" tabindex="0" ' + rowClick + '>' +
+            '<td class="audit-log-col-time">' + when + '</td>' +
+            '<td class="audit-log-col-msg" title="' + msg + '">' + (msg || dash) + '</td>' +
+            '<td>' + (catLabel ? '<span class="audit-tag audit-tag--cat">' + catLabel + '</span>' : dash) + '</td>' +
+            '<td>' + (actionLabel ? '<span class="audit-tag audit-tag--act">' + actionLabel + '</span>' : dash) + '</td>' +
+            '<td>' + (res ? '<span class="audit-tag ' + resultCls + '">' + res + '</span>' : dash) + '</td>' +
+            '<td class="audit-log-col-ip">' + (ip || dash) + '</td>' +
+            '<td class="audit-log-col-resource" title="' + rid + '">' + (rid || dash) + '</td>' +
+            '</tr>'
         );
     }).join('');
+    listEl.innerHTML = head + rows + '</tbody></table></div>';
     if (typeof applyTranslations === 'function') {
         applyTranslations(listEl);
     }
@@ -326,15 +378,56 @@ function resetAuditLogFilters() {
     const act = document.getElementById('audit-filter-action');
     const res = document.getElementById('audit-filter-result');
     const q = document.getElementById('audit-filter-q');
-    const since = document.getElementById('audit-filter-since');
-    const until = document.getElementById('audit-filter-until');
     if (cat) cat.value = '';
     if (res) res.value = '';
     if (q) q.value = '';
-    if (since) since.value = '';
-    if (until) until.value = '';
+    if (typeof window.AuditDatetimePicker !== 'undefined' && typeof window.AuditDatetimePicker.clearAll === 'function') {
+        window.AuditDatetimePicker.clearAll();
+    }
     rebuildAuditActionSelect();
+    syncAuditCustomSelect('audit-filter-category');
+    syncAuditCustomSelect('audit-filter-result');
     filterAuditLogs();
+}
+
+function applyAuditTimePreset(preset) {
+    if (typeof window.AuditDatetimePicker === 'undefined') return;
+    const now = new Date();
+    let since = new Date(now.getTime());
+    let until = new Date(now.getTime());
+    switch (preset) {
+        case '15m':
+            since = new Date(now.getTime() - 15 * 60 * 1000);
+            break;
+        case '1h':
+            since = new Date(now.getTime() - 60 * 60 * 1000);
+            break;
+        case '24h':
+            since = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+            break;
+        case '7d':
+            since = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+            break;
+        case 'today':
+            since = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+            break;
+        default:
+            return;
+    }
+    window.AuditDatetimePicker.setValue('audit-filter-since', since);
+    window.AuditDatetimePicker.setValue('audit-filter-until', until);
+    filterAuditLogs();
+}
+
+function initAuditTimePresets() {
+    const wrap = document.getElementById('audit-time-presets');
+    if (!wrap || wrap.dataset.bound === '1') return;
+    wrap.dataset.bound = '1';
+    wrap.addEventListener('click', function (ev) {
+        const btn = ev.target.closest('[data-preset]');
+        if (!btn) return;
+        applyAuditTimePreset(btn.getAttribute('data-preset'));
+    });
 }
 
 /** 资源已被删除/移除的审计操作，不再提供「打开关联资源」 */
@@ -597,7 +690,142 @@ async function showAuditLogDetail(id) {
 function initAuditLogsSection() {
     if (!document.getElementById('audit-log-list')) return;
     initAuditPageSizeFromStorage();
+    initAuditFilterSelects();
     rebuildAuditActionSelect();
-    loadAuditMeta();
+    if (typeof window.AuditDatetimePicker !== 'undefined' && typeof window.AuditDatetimePicker.init === 'function') {
+        window.AuditDatetimePicker.init();
+    }
+    initAuditTimePresets();
+    updateAuditTimezoneHint();
     loadAuditLogs(1);
+}
+
+var auditCustomSelectMap = {};
+var auditFilterSelectsDocListener = false;
+
+function closeAllAuditCustomSelects() {
+    Object.keys(auditCustomSelectMap).forEach(function (id) {
+        auditCustomSelectMap[id].wrapper.classList.remove('open');
+    });
+}
+
+function syncAuditCustomSelect(selectId) {
+    var reg = auditCustomSelectMap[selectId];
+    if (!reg) return;
+    var select = reg.select;
+    var dropdown = reg.dropdown;
+    var trigger = reg.trigger;
+    var wrapper = reg.wrapper;
+    var valueSpan = trigger.querySelector('.audit-custom-select-value');
+
+    dropdown.innerHTML = '';
+    Array.prototype.forEach.call(select.options, function (opt) {
+        var item = document.createElement('div');
+        item.className = 'audit-custom-select-option';
+        item.setAttribute('role', 'option');
+        item.setAttribute('data-value', opt.value);
+        if (opt.value === select.value) {
+            item.classList.add('is-selected');
+            item.setAttribute('aria-selected', 'true');
+        }
+        var check = document.createElement('span');
+        check.className = 'audit-custom-select-check';
+        check.setAttribute('aria-hidden', 'true');
+        check.textContent = '✓';
+        var label = document.createElement('span');
+        label.className = 'audit-custom-select-label';
+        label.textContent = opt.textContent;
+        item.appendChild(check);
+        item.appendChild(label);
+        dropdown.appendChild(item);
+    });
+
+    var selectedOpt = select.options[select.selectedIndex];
+    if (valueSpan) {
+        valueSpan.textContent = selectedOpt ? selectedOpt.textContent : '';
+    }
+    trigger.disabled = !!select.disabled;
+    wrapper.classList.toggle('is-disabled', !!select.disabled);
+}
+
+function enhanceAuditFilterSelect(selectId) {
+    var select = document.getElementById(selectId);
+    if (!select) return;
+    if (select.dataset.auditCustom === '1') {
+        syncAuditCustomSelect(selectId);
+        return;
+    }
+    select.dataset.auditCustom = '1';
+    select.classList.add('audit-native-select');
+    select.tabIndex = -1;
+    select.setAttribute('aria-hidden', 'true');
+
+    var wrapper = document.createElement('div');
+    wrapper.className = 'audit-custom-select';
+
+    var trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'audit-custom-select-trigger';
+    trigger.setAttribute('aria-haspopup', 'listbox');
+    var valueSpan = document.createElement('span');
+    valueSpan.className = 'audit-custom-select-value';
+    trigger.appendChild(valueSpan);
+    var caret = document.createElement('span');
+    caret.className = 'audit-custom-select-caret';
+    caret.setAttribute('aria-hidden', 'true');
+    caret.textContent = '▾';
+    trigger.appendChild(caret);
+
+    var dropdown = document.createElement('div');
+    dropdown.className = 'audit-custom-select-dropdown';
+    dropdown.setAttribute('role', 'listbox');
+
+    var parent = select.parentNode;
+    parent.insertBefore(wrapper, select);
+    wrapper.appendChild(trigger);
+    wrapper.appendChild(dropdown);
+    wrapper.appendChild(select);
+
+    auditCustomSelectMap[selectId] = {
+        wrapper: wrapper,
+        trigger: trigger,
+        dropdown: dropdown,
+        select: select
+    };
+
+    trigger.addEventListener('click', function (e) {
+        e.stopPropagation();
+        if (select.disabled) return;
+        var open = wrapper.classList.contains('open');
+        closeAllAuditCustomSelects();
+        if (!open) wrapper.classList.add('open');
+    });
+
+    dropdown.addEventListener('click', function (e) {
+        var opt = e.target.closest('.audit-custom-select-option');
+        if (!opt) return;
+        var val = opt.getAttribute('data-value');
+        if (val === null) val = '';
+        if (select.value !== val) {
+            select.value = val;
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        wrapper.classList.remove('open');
+        syncAuditCustomSelect(selectId);
+    });
+
+    syncAuditCustomSelect(selectId);
+}
+
+function initAuditFilterSelects() {
+    if (!document.getElementById('audit-filter-category')) return;
+    if (!auditFilterSelectsDocListener) {
+        document.addEventListener('click', function () {
+            closeAllAuditCustomSelects();
+        });
+        auditFilterSelectsDocListener = true;
+    }
+    enhanceAuditFilterSelect('audit-filter-category');
+    enhanceAuditFilterSelect('audit-filter-action');
+    enhanceAuditFilterSelect('audit-filter-result');
 }

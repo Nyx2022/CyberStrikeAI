@@ -3010,19 +3010,27 @@
 
                             <!-- 日志审计 -->
                             <div id="settings-section-audit" class="settings-section-content">
-                                <div class="settings-section-header">
+                                <div class="audit-section-head">
                                     <h3 data-i18n="settingsAudit.title">日志审计</h3>
-                                    <p class="settings-description" data-i18n="settingsAudit.description">记录平台管理类操作（登录、配置、删除等），不记录对话正文、终端/WebShell 每次命令与工具调用明细。</p>
-                                    <p id="audit-retention-hint" class="settings-description audit-retention-hint" hidden></p>
+                                    <div id="audit-summary-stats" class="audit-summary-tags" hidden>
+                                        <span class="audit-summary-tag"><span class="audit-summary-tag-label" data-i18n="settingsAudit.statTotal">当前筛选</span><strong id="audit-stat-total">0</strong></span>
+                                        <span class="audit-summary-tag audit-summary-tag--ok"><span class="audit-summary-tag-label" data-i18n="settingsAudit.statSuccess">成功</span><strong id="audit-stat-success">0</strong></span>
+                                        <span class="audit-summary-tag audit-summary-tag--warn"><span class="audit-summary-tag-label" data-i18n="settingsAudit.statFailures">失败</span><strong id="audit-stat-failures">0</strong></span>
+                                        <span class="audit-summary-tag"><span class="audit-summary-tag-label" data-i18n="settingsAudit.statRecent7d">近 7 天</span><strong id="audit-stat-recent">0</strong></span>
+                                    </div>
                                 </div>
-                                <div id="audit-summary-stats" class="audit-summary-stats" hidden>
-                                    <div class="audit-stat-card"><span class="audit-stat-label" data-i18n="settingsAudit.statTotal">当前筛选</span><strong id="audit-stat-total">0</strong></div>
-                                    <div class="audit-stat-card"><span class="audit-stat-label" data-i18n="settingsAudit.statFailures">失败</span><strong id="audit-stat-failures">0</strong></div>
-                                    <div class="audit-stat-card"><span class="audit-stat-label" data-i18n="settingsAudit.statRecent7d">近 7 天</span><strong id="audit-stat-recent">0</strong></div>
-                                </div>
-                                <div class="audit-logs-toolbar">
-                                    <div class="audit-logs-filters">
-                                        <label class="audit-filter-cascade-group">
+                                <div class="audit-filter-card">
+                                    <div class="audit-time-presets" id="audit-time-presets">
+                                        <span class="audit-time-presets-label" data-i18n="settingsAudit.timePresets">快捷</span>
+                                        <button type="button" class="audit-time-preset-btn" data-preset="15m" data-i18n="settingsAudit.preset15m">最近15分钟</button>
+                                        <button type="button" class="audit-time-preset-btn" data-preset="1h" data-i18n="settingsAudit.preset1h">最近1小时</button>
+                                        <button type="button" class="audit-time-preset-btn" data-preset="24h" data-i18n="settingsAudit.preset24h">最近24小时</button>
+                                        <button type="button" class="audit-time-preset-btn" data-preset="7d" data-i18n="settingsAudit.preset7d">最近7天</button>
+                                        <button type="button" class="audit-time-preset-btn" data-preset="today" data-i18n="settingsAudit.presetToday">今天</button>
+                                    </div>
+                                    <div class="audit-filter-fields">
+                                        <div class="audit-filter-row">
+                                        <label class="audit-field audit-field--event">
                                             <span data-i18n="settingsAudit.filterEvent">事件类型</span>
                                             <div class="audit-filter-cascade">
                                                 <select id="audit-filter-category" onchange="onAuditCategoryFilterChange()" aria-label="类别">
@@ -3049,7 +3057,7 @@
                                                 </select>
                                             </div>
                                         </label>
-                                        <label>
+                                        <label class="audit-field audit-field--result">
                                             <span data-i18n="settingsAudit.filterResult">结果</span>
                                             <select id="audit-filter-result">
                                                 <option value="" data-i18n="settingsAudit.filterAll">全部</option>
@@ -3057,36 +3065,54 @@
                                                 <option value="failure">failure</option>
                                             </select>
                                         </label>
-                                        <label>
+                                        <div class="audit-filter-time-group">
+                                        <label class="audit-field audit-field--time">
                                             <span data-i18n="settingsAudit.filterSince">开始时间</span>
-                                            <input type="datetime-local" id="audit-filter-since" />
+                                            <div class="audit-datetime-field" id="audit-filter-since-field">
+                                                <input type="text" id="audit-filter-since" class="audit-datetime-input" readonly autocomplete="off" data-i18n="settingsAudit.datetimePlaceholder" data-i18n-attr="placeholder" placeholder="选择日期时间" />
+                                                <button type="button" class="audit-datetime-btn audit-datetime-clear-btn" title="Clear" aria-label="Clear" hidden>&times;</button>
+                                                <button type="button" class="audit-datetime-btn audit-datetime-open-btn" title="Open" aria-label="Open">
+                                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2" stroke="currentColor" stroke-width="2"/><path d="M16 2v4M8 2v4M3 10h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                                                </button>
+                                            </div>
                                         </label>
-                                        <label>
+                                        <label class="audit-field audit-field--time">
                                             <span data-i18n="settingsAudit.filterUntil">结束时间</span>
-                                            <input type="datetime-local" id="audit-filter-until" />
+                                            <div class="audit-datetime-field" id="audit-filter-until-field">
+                                                <input type="text" id="audit-filter-until" class="audit-datetime-input" readonly autocomplete="off" data-i18n="settingsAudit.datetimePlaceholder" data-i18n-attr="placeholder" placeholder="选择日期时间" />
+                                                <button type="button" class="audit-datetime-btn audit-datetime-clear-btn" title="Clear" aria-label="Clear" hidden>&times;</button>
+                                                <button type="button" class="audit-datetime-btn audit-datetime-open-btn" title="Open" aria-label="Open">
+                                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2" stroke="currentColor" stroke-width="2"/><path d="M16 2v4M8 2v4M3 10h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                                                </button>
+                                            </div>
                                         </label>
-                                        <label>
+                                        </div>
+                                        </div>
+                                    </div>
+                                    <div class="audit-filter-bottom">
+                                        <label class="audit-field audit-field--keyword">
                                             <span data-i18n="settingsAudit.filterQuery">关键词</span>
                                             <input type="text" id="audit-filter-q" data-i18n="settingsAudit.filterQueryPlaceholder" data-i18n-attr="placeholder" placeholder="消息 / 资源 ID / 操作名" />
                                         </label>
-                                        <button type="button" class="btn-secondary" onclick="filterAuditLogs()" data-i18n="settingsAudit.filterBtn">筛选</button>
-                                        <button type="button" class="btn-secondary" onclick="resetAuditLogFilters()" data-i18n="settingsAudit.resetBtn">重置</button>
-                                    </div>
-                                    <div class="audit-logs-actions">
-                                        <button type="button" class="btn-secondary" onclick="refreshAuditLogs()" data-i18n="common.refresh">刷新</button>
-                                        <div class="audit-export-dropdown">
-                                            <button type="button" class="btn-secondary audit-export-trigger" id="audit-export-trigger" onclick="toggleAuditExportMenu(event)" aria-haspopup="true" aria-expanded="false">
-                                                <span data-i18n="settingsAudit.exportBtn">导出</span>
-                                                <span class="audit-export-caret" aria-hidden="true">▾</span>
-                                            </button>
-                                            <div id="audit-export-menu" class="audit-export-menu" role="menu" hidden>
-                                                <button type="button" class="audit-export-menu-item" role="menuitem" onclick="runAuditExport('json')" data-i18n="settingsAudit.exportJson">导出 JSON</button>
-                                                <button type="button" class="audit-export-menu-item" role="menuitem" onclick="runAuditExport('csv')" data-i18n="settingsAudit.exportCsv">导出 CSV</button>
+                                        <div class="audit-logs-actions">
+                                            <button type="button" class="btn-primary" onclick="filterAuditLogs()" data-i18n="settingsAudit.filterBtn">筛选</button>
+                                            <button type="button" class="btn-secondary" onclick="resetAuditLogFilters()" data-i18n="settingsAudit.resetBtn">重置</button>
+                                            <button type="button" class="btn-secondary" onclick="refreshAuditLogs()" data-i18n="common.refresh">刷新</button>
+                                            <div class="audit-export-dropdown">
+                                                <button type="button" class="btn-secondary audit-export-trigger" id="audit-export-trigger" onclick="toggleAuditExportMenu(event)" aria-haspopup="true" aria-expanded="false">
+                                                    <span data-i18n="settingsAudit.exportBtn">导出</span>
+                                                    <span class="audit-export-caret" aria-hidden="true">▾</span>
+                                                </button>
+                                                <div id="audit-export-menu" class="audit-export-menu" role="menu" hidden>
+                                                    <button type="button" class="audit-export-menu-item" role="menuitem" onclick="runAuditExport('json')" data-i18n="settingsAudit.exportJson">导出 JSON</button>
+                                                    <button type="button" class="audit-export-menu-item" role="menuitem" onclick="runAuditExport('csv')" data-i18n="settingsAudit.exportCsv">导出 CSV</button>
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
+                                    <p id="audit-filter-timezone-hint" class="audit-timezone-hint" hidden></p>
                                 </div>
-                                <div id="audit-log-list" class="audit-log-list c2-event-list"></div>
+                                <div id="audit-log-list" class="audit-log-list"></div>
                                 <div id="audit-logs-pagination" class="pagination-container audit-logs-pagination"></div>
                             </div>
 
@@ -4301,6 +4327,7 @@
     <script src="/static/js/chat.js"></script>
     <script src="/static/js/hitl.js"></script>
     <script src="/static/js/settings.js"></script>
+    <script src="/static/js/audit-datetime-picker.js"></script>
     <script src="/static/js/audit.js"></script>
     <script src="/static/js/wechat-robot.js"></script>
     <script src="/static/vendor/xterm.js"></script>
