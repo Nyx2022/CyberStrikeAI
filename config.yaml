@@ -40,6 +40,9 @@ audit:
   retention_days: 15 # 0 表示不自动清理
   max_detail_bytes: 8192
   auth_failure_cooldown_seconds: 60 # 同一 IP 登录/改密失败审计最短间隔（秒）；未配置时默认 60；-1 关闭节流
+# MCP 状态监控执行记录保留（tool_executions 表）
+monitor:
+  retention_days: 90 # 省略时默认 90；0 表示不自动清理
 # ============================================
 # 对话相关配置
 # ============================================
